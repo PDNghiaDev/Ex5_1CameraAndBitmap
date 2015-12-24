@@ -1,8 +1,6 @@
 package com.gmail.pdnghiadev.ex5_1cameraandbitmap.fragments;
 
 
-
-
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -10,6 +8,7 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
@@ -34,6 +33,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.lang.ref.WeakReference;
 
 
 /**
@@ -115,7 +115,7 @@ public class SignUpStep1Fragment extends Fragment implements View.OnClickListene
 
     }
 
-    public Boolean checkGender(){ // Check for Gender
+    public Boolean checkGender() { // Check for Gender
         return mGender.getCheckedRadioButtonId() < 0;
     }
 
@@ -186,14 +186,15 @@ public class SignUpStep1Fragment extends Fragment implements View.OnClickListene
                 .setItems(items, new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int item) {
-                        if (items[item].equals("Take photo")) {
-                            dispatchTakePictureIntent();
-                        }else if (items[item].equals("Choose from library")) {
-                            Intent intent = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
-                            intent.setType("image/*");
-                            startActivityForResult(Intent.createChooser(intent, "Select File"), SELECT_FILE);
-                        }else if (items[item].equals("Cancel")) {
-                            dialog.dismiss();
+                        switch (item) {
+                            case 0: // Take photo
+                                dispatchTakePictureIntent();
+                                break;
+                            case 1: // Choose from library
+                                Intent intent = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+                                intent.setType("image/*");
+                                startActivityForResult(Intent.createChooser(intent, "Select File"), SELECT_FILE);
+                                break;
                         }
                     }
                 });
@@ -205,7 +206,7 @@ public class SignUpStep1Fragment extends Fragment implements View.OnClickListene
         if (resultCode == getActivity().RESULT_OK) {
             if (requestCode == SELECT_FILE) {
                 onSelectFromGalleryResult(data);
-            }else if (requestCode == REQUEST_IMAGE_CAPTURE) {
+            } else if (requestCode == REQUEST_IMAGE_CAPTURE) {
                 onCaptureImageResult(data);
             }
         }
@@ -217,27 +218,9 @@ public class SignUpStep1Fragment extends Fragment implements View.OnClickListene
         thumbnail.compress(Bitmap.CompressFormat.JPEG, 90, bytes);
 
         destination = new File(Environment.getExternalStorageDirectory(), "avatar.jpg");
-
-
-        FileOutputStream fo;
-        try {
-            if (!destination.exists()) {
-                destination.createNewFile();
-            }
-            fo = new FileOutputStream(destination);
-            fo.write(bytes.toByteArray());
-            fo.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        writeBytesToFile(destination, bytes);
 
         mAvatar.setImageBitmap(thumbnail);
-    }
-
-    private Bitmap convertFileToBitmap(String file) {
-        Bitmap bitmap = BitmapFactory.decodeFile(file);
-
-        return bitmap;
     }
 
     private void onSelectFromGalleryResult(Intent data) {
@@ -249,40 +232,86 @@ public class SignUpStep1Fragment extends Fragment implements View.OnClickListene
 
         String selectedImagePatch = cursor.getString(column_index);
 
-        Bitmap bm;
-        BitmapFactory.Options options = new BitmapFactory.Options();
-        options.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(selectedImagePatch, options);
-        final int REQUIRED_SIZE = 400;
-        int scale = 1;
-        while (options.outWidth / scale / 2 >= REQUIRED_SIZE && options.outHeight / scale / 2 >= REQUIRED_SIZE) {
-            scale *= 2;
-        }
-        options.inSampleSize = scale;
-        options.inJustDecodeBounds = false;
-        bm = BitmapFactory.decodeFile(selectedImagePatch, options);
-
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        bm.compress(Bitmap.CompressFormat.JPEG, 90, bytes);
-
-        destination = new File(Environment.getExternalStorageDirectory(), "avatar.jpg");
-        FileOutputStream fo;
-        try {
-            if (!destination.exists()) {
-                destination.createNewFile();
-            }
-            fo = new FileOutputStream(destination);
-            fo.write(bytes.toByteArray());
-            fo.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        mAvatar.setImageBitmap(bm);
+        BitmapWorkerTask bitmapWorkerTask = new BitmapWorkerTask(mAvatar);
+        bitmapWorkerTask.execute(selectedImagePatch);
     }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
     }
+
+    // TODO: write bytes array into File
+    public void writeBytesToFile(File file, ByteArrayOutputStream bytes) {
+        FileOutputStream fout = null;
+        try {
+            if (!file.exists()) {
+                file.createNewFile();
+            }
+            fout = new FileOutputStream(file);
+            fout.write(bytes.toByteArray());
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            if (fout != null) {
+                try {
+                    fout.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    // TODO: decode Bitmap from File
+    public Bitmap decodeSampleBitmapFromFile(String res) {
+        // The first decode with inJustDecodeBounds = true to check dimensions
+        final BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(res, options);
+
+        // Calculate inSampleSize
+        final int REQUIRED_SIZE = 400;
+        int scale = 1;
+        while (options.outWidth / scale / 2 >= REQUIRED_SIZE && options.outHeight / scale / 2 >= REQUIRED_SIZE) {
+            scale *= 2;
+        }
+        options.inSampleSize = scale;
+
+        // Decode bitmap with inSampleSize set
+        options.inJustDecodeBounds = false;
+        return BitmapFactory.decodeFile(res, options);
+    }
+
+    class BitmapWorkerTask extends AsyncTask<String, Void, Bitmap> {
+        private final WeakReference<ImageView> imageViewWeakReference;
+        private String res;
+
+        public BitmapWorkerTask(ImageView image) {
+            imageViewWeakReference = new WeakReference<>(image);
+        }
+
+        @Override
+        protected Bitmap doInBackground(String... params) {
+            res = params[0];
+            return decodeSampleBitmapFromFile(res);
+        }
+
+        @Override
+        protected void onPostExecute(Bitmap bitmap) {
+            if (bitmap != null) {
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, bytes);
+
+                destination = new File(Environment.getExternalStorageDirectory(), "avatar.jpg");
+                writeBytesToFile(destination, bytes);
+                final ImageView imageView = imageViewWeakReference.get();
+                if (imageView != null) {
+                    imageView.setImageBitmap(bitmap);
+                }
+            }
+        }
+    }
+
+
 }
